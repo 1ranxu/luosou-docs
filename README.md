@@ -61,6 +61,7 @@
 - 用户列表页面
 - 搜索图片
 - 聚合接口
+- 聚合接口优化
 
 **后端**
 
@@ -70,10 +71,10 @@
   - 图片（外部，非该项目或者非该项目用户生产）
 - 搜索图片
 - 聚合接口
-- 数据抓取
-- 聚合搜索接口
-  - 适配器模式
+- 聚合接口优化
   - 门面模式
+  - 适配器模式
+  - 注册器模式
 - ElasticSearch的搭建及入门
 - ElasticSearch的使用（建表，读写数据，调API，整合）
 - 数据同步
@@ -218,10 +219,6 @@ npm i --save ant-design-vue@4.x
 ![image-20231024153123088](assets/image-20231024153123088.png)
 
 ![image-20231024155542929](assets/image-20231024155542929.png)
-
-5. 展示
-
-
 
 ### URL记录页面搜索状态
 
@@ -384,6 +381,16 @@ export default myAxios;
 3. 前端重复代码比较多 => 用一个接口，通过不同的参数去区分要搜索的数据的类型
 
 ![image-20231028104251185](assets/image-20231028104251185.png)
+
+### 聚合接口优化
+
+![image-20231028154039920](assets/image-20231028154039920.png)
+
+![image-20231028154103021](assets/image-20231028154103021.png)
+
+![image-20231028154118566](assets/image-20231028154118566.png)
+
+![image-20231028154132912](assets/image-20231028154132912.png)
 
 ## 后端
 
@@ -746,3 +753,446 @@ public class SearchController {
     }
 }
 ```
+
+### 聚合接口优化
+
+让前端既能一次搜出所有数据，又能够获取某一类数据（比如分页）
+
+前端传type，调用后端同一个接口，后端根据type调用不同的service查询
+
+比如：type = user ，userService.query()
+
+1. 如果type为空，那么搜索所有的数据
+2. 如果不为空
+   1. 如果type合法，查出对应数据
+   2. 否则报错
+
+问题：
+
+1. type增多后，查询逻辑堆积在controller代码里
+
+#### **门面模式**
+
+让用户（客户端）更轻松地去使用服务，不需要关心门面背后的细节
+
+```java
+/**
+ * 聚合接口
+ */
+@RestController
+@RequestMapping("/search")
+@Slf4j
+public class SearchController {
+    @Resource
+    private SearchFacade searchFacade;
+    /**
+     * 聚合
+     *
+     * @param searchRequest
+     * @return
+     */
+    @PostMapping("/all")
+    public BaseResponse<SearchVO> searchAll(@RequestBody SearchRequest searchRequest, HttpServletRequest request) {
+        SearchVO searchVO = searchFacade.searchAll(searchRequest, request);
+        return ResultUtils.success(searchVO);
+    }
+}
+```
+
+```java
+@Component
+@Slf4j
+public class SearchFacade {
+    @Resource
+    private PostDataSource postDataSource;
+
+    @Resource
+    private UserDataSource userDataSource;
+
+    @Resource
+    private PictureDataSource pictureDataSource;
+
+    @Resource
+    private DataSourceRegistry dataSourceRegistry;
+
+    public SearchVO searchAll(SearchRequest searchRequest, HttpServletRequest request) {
+        String type = searchRequest.getType();
+        SearchTypeEnum searchTypeEnum = SearchTypeEnum.getEnumByValue(type);
+        String searchText = searchRequest.getSearchText();
+        long current = searchRequest.getCurrent();
+        long pageSize = searchRequest.getPageSize();
+
+        SearchVO searchVO = new SearchVO();
+        if (searchTypeEnum == null) {
+            CompletableFuture<Page<Picture>> pictureTask =
+                    CompletableFuture.supplyAsync(() -> pictureDataSource.doSearch(searchText, current, pageSize));
+            CompletableFuture<Page<UserVO>> userTask = CompletableFuture.supplyAsync(() -> {
+                return userDataSource.doSearch(searchText, current, pageSize);
+            });
+
+            CompletableFuture<Page<PostVO>> postTask = CompletableFuture.supplyAsync(() -> {
+                return postDataSource.doSearch(searchText, current, pageSize);
+            });
+
+            CompletableFuture.allOf(pictureTask, userTask, postTask).join();
+
+            try {
+                searchVO.setPictureList(pictureTask.get().getRecords());
+                searchVO.setUserList(userTask.get().getRecords());
+                searchVO.setPostList(postTask.get().getRecords());
+            } catch (Exception e) {
+                log.error("查询异常", e);
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR);
+            }
+
+        } else {
+            DataSource dataSource = dataSourceRegistry.getDataSourceByType(type);
+            Page page = dataSource.doSearch(searchText, current, pageSize);
+            searchVO.setDataList(page.getRecords());
+        }
+        return searchVO;
+    }
+}
+```
+
+#### **适配器模式**
+
+1. 定制统一数据源接入规范：什么数据源允许接入？接入时要满足什么要求？
+
+   任何接入我们系统的数据，必须要能够根据关键词搜索，并且支持分页
+
+   声明接口来定义规范
+
+   ```java
+   /**
+    * 数据源接口（新接入数据源必须实现）
+    * @param <T>
+    */
+   public interface DataSource<T> {
+       /**
+        *搜索
+        * @param searchText
+        * @param pageNum
+        * @param pageSize
+        * @return
+        */
+       Page<T> doSearch(String searchText, long pageNum, long pageSize);
+   }
+   ```
+
+2. 假如我们的数据源已经支持了搜索，但是原有的方法参数和我们的规范不一致，怎么办？
+
+   适配器模式的作用：通过转换，让两个系统完成对接 
+
+   ```java
+   /**
+    * 图片获取服务实现
+    */
+   @Service
+   @Slf4j
+   public class PictureDataSource implements DataSource<Picture> {
+   
+       @Override
+       public Page<Picture> doSearch(String searchText, long current, long pageSize) {
+           Page<Picture> page = new Page<>(current, pageSize);
+           current = (current - 1) * pageSize;
+           String url = String.format("https://cn.bing.com/images/search?q=%s&first=%s", searchText, current);
+           Document doc = null;
+           try {
+               doc = Jsoup.connect(url).get();
+           } catch (IOException e) {
+               throw new BusinessException(ErrorCode.SYSTEM_ERROR, "数据获取异常");
+           }
+           Elements elements = doc.select(".iuscp.isv");
+           List<Picture> pictureList = new ArrayList<>();
+           for (Element element : elements) {
+               if (pictureList.size() >= pageSize) {
+                   break;
+               }
+               //图片地址:murl
+               String m = element.select(".iusc").get(0).attr("m");
+               Map<String, Object> map = JSONUtil.toBean(m, Map.class);
+               String murl = (String) map.get("murl");
+               //图片标题
+               String title = element.select(".inflnk").get(0).attr("aria-label");
+   
+               Picture picture = new Picture();
+               picture.setTitle(title);
+               picture.setUrl(murl);
+               pictureList.add(picture);
+           }
+           page.setRecords(pictureList);
+           return page;
+       }
+   }
+   ```
+
+   ```java
+   /**
+    * 帖子数据源
+    */
+   @Service
+   @Slf4j
+   public class PostDataSource implements DataSource<PostVO> {
+       @Resource
+       private PostService postService;
+   
+   
+       @Override
+       public Page<PostVO> doSearch(String searchText, long current, long pageSize) {
+           PostQueryRequest postQueryRequest = new PostQueryRequest();
+           postQueryRequest.setSearchText(searchText);
+           postQueryRequest.setCurrent(current);
+           postQueryRequest.setPageSize(pageSize);
+           ServletRequestAttributes requestAttributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+           HttpServletRequest request = requestAttributes.getRequest();
+           Page<PostVO> postVOPage = postService.listPostVOByPage(postQueryRequest, request);
+           return postVOPage;
+   
+       }
+   
+   }
+   ```
+
+   ```java
+   /**
+    * 用户数据源
+    */
+   @Service
+   @Slf4j
+   public class UserDataSource implements DataSource<UserVO> {
+       @Resource
+       private UserService userService;
+   
+       @Override
+       public Page<UserVO> doSearch(String searchText, long current, long pageSize) {
+           UserQueryRequest userQueryRequest = new UserQueryRequest();
+           userQueryRequest.setUserName(searchText);
+           userQueryRequest.setCurrent(current);
+           userQueryRequest.setPageSize(pageSize);
+           Page<UserVO> userVOPage = userService.listUserVOByPage(userQueryRequest);
+           return userVOPage;
+       }
+   }
+   ```
+
+#### **注册器模式**
+
+提前通过一个 map 或者其他类型存储好后面需要调用对象
+
+效果：代码量大幅度减少，可维护可扩展
+
+```java
+@Component
+public class DataSourceRegistry {
+    @Resource
+    private PostDataSource postDataSource;
+
+    @Resource
+    private UserDataSource userDataSource;
+
+    @Resource
+    private PictureDataSource pictureDataSource;
+
+    private Map<String, DataSource> typeDataSourceMap;
+
+    @PostConstruct
+    public void doninit() {
+        typeDataSourceMap = new HashMap() {{
+            put(SearchTypeEnum.POST.getValue(), postDataSource);
+            put(SearchTypeEnum.PICTURE.getValue(), pictureDataSource);
+            put(SearchTypeEnum.USER.getValue(), userDataSource);
+        }};
+    }
+
+    public DataSource getDataSourceByType(String type) {
+        if (typeDataSourceMap==null){
+            return null;
+        }
+        return typeDataSourceMap.get(type);
+    }
+}
+```
+
+### Elastic Search
+
+**存在问题：**搜索不够灵活
+
+比如搜索 "Spring实现RBAC权限''，无法搜到"Spring-Security 实现RBAC 权限控制系统"，因为数据库的like是包含查询
+
+官网：https://www.elastic.co/cn/
+
+![image-20231028160230352](assets/image-20231028160230352.png)
+
+Beats：从各种不同类型的文件 / 应用采集数据 			a,c,b,e,d
+
+Logstash：从多个采集器或数据源抽取数据，转换成规范的数据，向ES输送 a,b,c,d,e
+
+ElasticSearch：存储，查询数据
+
+Kibana：可视化ES的数据
+
+#### 安装
+
+[Install Elasticsearch on Windows|弹性搜索指南 [7.17\] |弹性的](https://www.elastic.co/guide/en/elasticsearch/reference/7.17/zip-windows.html)
+
+[Install Kibana on Windows | Kibana Guide [7.17\] | Elastic](https://www.elastic.co/guide/en/kibana/7.17/windows.html)
+
+1. 下载并解压
+
+2. 运行
+
+   如果运行卡死，就动动方向键，回车键
+
+   ![image-20231028170005983](assets/image-20231028170005983.png)
+
+   ![image-20231028171143489](assets/image-20231028171143489.png)
+
+#### 索引
+
+相当于MySQL中的表
+
+正向索引：理解为书籍的目录，可以快速帮你找到对应的内容
+
+倒排索引：
+
+文章A：你好，我是rapper
+
+文章B：老师你好，我是落樱
+
+分词：
+
+你好，我是，rapper
+
+老师，你好，我是，落樱
+
+构建倒排索引：
+
+| 词     | 内容id      |      |
+| ------ | ----------- | ---- |
+| 你好   | 文章A,文章B |      |
+| 我是   | 文章A,文章B |      |
+| rapper | 文章A       |      |
+| 老师   | 文章B       |      |
+| 落樱   | 文章B       |      |
+
+#### ES的调用方式
+
+1）**restful api调用**（http 请求）
+
+GET请求：http://localhost:9200/
+
+命令行模拟发送请求：curl -X GET "localhost:9200/?pretty"
+
+ES的启动端口
+
+1. 9200：给外部用户（客户端）调用
+2. 9300：给ES集群内部通信
+
+2）**kibana devtools**
+
+3）客户端调用
+
+1. Java客户端https://www.elastic.co/guide/en/elasticsearch/client/java-api-client/7.17/_getting_started.html
+
+
+
+#### ES语法
+
+**DSL**（推荐）
+
+1）增
+
+```http
+POST post/_doc
+{
+  "title": "luoying",
+  "desc": "落樱的描述"
+}
+```
+
+2）改
+
+```http
+POST post/_doc/qjuhdYsBh41AgrNqqc3Q
+{
+    "title": "luoying2",
+  "desc": "落樱的描述2"
+}
+```
+
+3）查
+
+```http
+GET post/_doc/qjuhdYsBh41AgrNqqc3Q
+
+GET post/_search
+{
+  "query": {
+    "match_all": { }
+  }
+}
+```
+
+4）删
+
+```http
+DELETE /post/_doc/qjuhdYsBh41AgrNqqc3Q
+```
+
+**EQL**
+
+专门查询ECS文档（标准指标文档）的数据的语法，更加规范https://www.elastic.co/guide/en/elasticsearch/reference/7.17/eql.html
+
+```http
+POST my_event/_doc
+{
+  "title": "luoying",
+  "desc": "落樱的描述",
+  "@timestamp": "2099-05-06T16:21:15.000Z",
+  "event": {
+    "original": """192.0.2.42 - - [06/May/2099:16:21:15 +0000] "GET /images/bg.jpg HTTP/1.0" 200 24736"""
+  }
+}
+```
+
+```http
+GET /my_event/_eql/search
+{
+  "query": """
+    any where 1 == 1
+  """
+}
+```
+
+不用记
+
+**SQL**
+
+学习成本低，需要插件支持，性能差
+
+https://www.elastic.co/guide/en/elasticsearch/reference/7.17/sql-getting-started.html
+
+```http
+POST /_sql?format=txt
+{
+  "query": "SELECT * FROM post WHERE title = 'luoying'"
+}
+```
+
+**Painless scripting language**
+
+编程式取值，更灵活，学习成本高
+
+#### Mapping
+
+理解为数据库的表结构，有哪些字段，字段类型
+
+```http
+GET post/_mapping
+```
+
+```
+
+```
+
