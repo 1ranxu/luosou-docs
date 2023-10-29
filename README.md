@@ -75,17 +75,16 @@
   - 门面模式
   - 适配器模式
   - 注册器模式
-- ElasticSearch的搭建及入门
-- ElasticSearch的使用（建表，读写数据，调API，整合）
+- ElasticSearch
 - 数据同步
+- 搜索建议
+- 关键词高亮
+- 前端防抖节流
 
 **优化**
 
 - 保障接口稳定性
-
-- 搜索结果关键词高亮
-- 搜索建议提示
-- 防抖节流
+- 
 
 ## 初始化
 
@@ -1034,9 +1033,9 @@ Kibana：可视化ES的数据
 
 #### 安装
 
-[Install Elasticsearch on Windows|弹性搜索指南 [7.17\] |弹性的](https://www.elastic.co/guide/en/elasticsearch/reference/7.17/zip-windows.html)
+[Install Elasticsearch on Windows|弹性搜索指南 [7.17\] |弹性的](https://www.elastic.co/guide/en/elasticsearch/reference/7.17/zip-windows.html) 9200
 
-[Install Kibana on Windows | Kibana Guide [7.17\] | Elastic](https://www.elastic.co/guide/en/kibana/7.17/windows.html)
+[Install Kibana on Windows | Kibana Guide [7.17\] | Elastic](https://www.elastic.co/guide/en/kibana/7.17/windows.html) 5601
 
 1. 下载并解压
 
@@ -1075,27 +1074,6 @@ Kibana：可视化ES的数据
 | rapper | 文章A       |      |
 | 老师   | 文章B       |      |
 | 落樱   | 文章B       |      |
-
-#### ES的调用方式
-
-1）**restful api调用**（http 请求）
-
-GET请求：http://localhost:9200/
-
-命令行模拟发送请求：curl -X GET "localhost:9200/?pretty"
-
-ES的启动端口
-
-1. 9200：给外部用户（客户端）调用
-2. 9300：给ES集群内部通信
-
-2）**kibana devtools**
-
-3）客户端调用
-
-1. Java客户端https://www.elastic.co/guide/en/elasticsearch/client/java-api-client/7.17/_getting_started.html
-
-
 
 #### ES语法
 
@@ -1193,6 +1171,961 @@ GET post/_mapping
 ```
 
 ```
-
+PUT /my-index
+{
+  "mappings": {
+    "properties": {
+      "age":    { "type": "integer" },  
+      "email":  { "type": "keyword"  }, 
+      "name":   { "type": "text"  }     
+    }
+  }
+}
 ```
 
+#### 分词器
+
+1. 空格分词器：whitespace
+
+```http
+POST _analyze
+{
+  "analyzer": "whitespace",
+  "text":     "The quick brown fox."
+}
+```
+
+2. 标准分词
+
+```http
+POST _analyze
+{
+  "tokenizer": "standard",
+  "filter":  [ "lowercase", "asciifolding" ],
+  "text":      "Is this déja vu?"
+}
+```
+
+3. 关键词分词：不分词，整句话作为专业术语
+
+```http
+POST _analyze
+{
+  "analyzer": "keyword",
+  "text": "The 2 QUICK Brown-Foxes jumped over the lazy dog's bone."
+}
+```
+
+**IK分词器**（ES插件）https://github.com/medcl/elasticsearch-analysis-ik
+
+1. 下载
+
+https://github.com/medcl/elasticsearch-analysis-ik/releases?page=4
+
+![image-20231028191841402](assets/image-20231028191841402.png)
+
+2. 解压至ik目录
+
+![image-20231028192132199](assets/image-20231028192132199.png)
+
+3. 修改版本
+
+![image-20231028192712951](assets/image-20231028192712951.png)
+
+![image-20231028193050831](assets/image-20231028193050831.png)
+
+4. 重启es
+
+![image-20231028193337008](assets/image-20231028193337008.png)
+
+5. 怎么让ik按照我们的想法去分词
+
+   自定义词典
+
+6. ik_smart和ik_max_word的区别。举例：小黑子
+
+   1. ik_smart是智能分词，分词方式：选择最像一个词的词，比如：“小”，“黑子”
+   2. ik_max_word   分词方式： 尽可能多的分词，比如：”小黑“，”黑子“
+
+#### **打分机制**
+
+有3条内容：
+
+1. 落樱是狗
+2. 落樱是小黑子
+3. 我是小黑子
+
+用户搜索：
+
+1. 落樱 => 会优先搜出第一条内容，因为第一条匹配了关键词，而且更短（匹配比例更大）
+2. 落樱小黑子 => 落樱，小，黑子 =>  2 > 3 > 1
+
+https://blog.csdn.net/weixin_41701290/article/details/119176943
+
+
+
+
+
+#### ES的调用方式
+
+1）**restful api调用**（http 请求）
+
+GET请求：http://localhost:9200/
+
+命令行模拟发送请求：curl -X GET "localhost:9200/?pretty"
+
+ES的启动端口
+
+1. 9200：给外部用户（客户端）调用
+2. 9300：给ES集群内部通信
+
+2）**kibana devtools**
+
+3）**客户端调用**
+
+1. ES官方的Java APIhttps://www.elastic.co/guide/en/elasticsearch/client/java-api-client/7.17/_getting_started.html
+2. HighLevelRestClient（已废弃，不建议用）
+3. Spring Data ElasticSearch（推荐）
+
+   https://docs.spring.io/spring-data/elasticsearch/docs/4.4.17/reference/html/#preface.requirements
+
+   ![image-20231029092824003](assets/image-20231029092824003.png)		                                                                                                                                                                                                                             用户可以自定义接口的方法名称，框架帮你自动生成查询
+
+   ![image-20231029093732565](assets/image-20231029093732565.png)
+
+#### ES实现搜索接口
+
+1、**建表（索引）**
+
+数据库表结构：
+
+```sql
+-- 帖子表
+create table if not exists post
+(
+    id         bigint auto_increment comment 'id' primary key,
+    title      varchar(512)                       null comment '标题',
+    content    text                               null comment '内容',
+    tags       varchar(1024)                      null comment '标签列表（json 数组）',
+    thumbNum   int      default 0                 not null comment '点赞数',
+    favourNum  int      default 0                 not null comment '收藏数',
+    userId     bigint                             not null comment '创建用户 id',
+    createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete   tinyint  default 0                 not null comment '是否删除',
+    index idx_userId (userId)
+) comment '帖子' collate = utf8mb4_unicode_ci;
+```
+
+ES Mapping:
+
+（id可以不放到字段设置里）
+
+aliases：别名（为了后续方便数据迁移）
+
+analyzer（存储时生效的分词器）：用 ik_max_word，拆的更碎，词语更多，更有可能被搜出来
+
+search_analyzer（查询时生效的分词器）：用ik_smart，更偏向于用户想搜的的分词
+
+想要让text类型的分词字段也支持精确查询，可以创建keyword类型的子字段
+
+```
+"fields": {
+  "keyword": {
+    "type": "keyword",
+    "ignore_above": 256 //超过字符数则忽略查询
+  }
+}
+```
+
+建表结构：
+
+```json
+PUT post_v1
+{
+  "aliases": {
+    "post": {}
+  },
+  "mappings": {
+    "properties": {
+      "title": {
+        "type": "text",
+        "analyzer": "ik_max_word",
+        "search_analyzer": "ik_smart",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "content": {
+        "type": "text",
+        "analyzer": "ik_max_word",
+        "search_analyzer": "ik_smart",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "tags": {
+        "type": "keyword"
+      }, 
+      "userId": {
+        "type": "keyword"
+      },
+      "createTime": {
+        "type": "date"
+      },
+      "updateTime": {
+        "type": "date"
+      },
+      "isDelete": {
+        "type": "keyword"
+      }
+    }
+  }
+}
+```
+
+2、**整合ES**
+
+1. 引入依赖
+
+```xml
+<!-- elasticsearch-->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+</dependency>
+```
+
+2. 创建实体类
+
+![image-20231029102457095](assets/image-20231029102457095.png)
+
+```java
+/**
+ * 帖子 ES 包装类
+ *
+ **/
+// todo 取消注释开启 ES（须先配置 ES）
+@Document(indexName = "post")
+@Data
+public class PostEsDTO implements Serializable {
+
+    private static final String DATE_TIME_PATTERN = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'";
+
+    /**
+     * id
+     */
+    @Id
+    private Long id;
+
+    /**
+     * 标题
+     */
+    private String title;
+
+    /**
+     * 内容
+     */
+    private String content;
+
+    /**
+     * 标签列表
+     */
+    private List<String> tags;
+
+    /**
+     * 创建用户 id
+     */
+    private Long userId;
+
+    /**
+     * 创建时间
+     */
+    @Field(index = false, store = true, type = FieldType.Date, format = {}, pattern = DATE_TIME_PATTERN)
+    private Date createTime;
+
+    /**
+     * 更新时间
+     */
+    @Field(index = false, store = true, type = FieldType.Date, format = {}, pattern = DATE_TIME_PATTERN)
+    private Date updateTime;
+
+    /**
+     * 是否删除
+     */
+    private Integer isDelete;
+
+    private static final long serialVersionUID = 1L;
+
+    private static final Gson GSON = new Gson();
+
+    /**
+     * 对象转包装类
+     *
+     * @param post
+     * @return
+     */
+    public static PostEsDTO objToDto(Post post) {
+        if (post == null) {
+            return null;
+        }
+        PostEsDTO postEsDTO = new PostEsDTO();
+        BeanUtils.copyProperties(post, postEsDTO);
+        String tagsStr = post.getTags();
+        if (StringUtils.isNotBlank(tagsStr)) {
+            postEsDTO.setTags(GSON.fromJson(tagsStr, new TypeToken<List<String>>() {
+            }.getType()));
+        }
+        return postEsDTO;
+    }
+
+    /**
+     * 包装类转对象
+     *
+     * @param postEsDTO
+     * @return
+     */
+    public static Post dtoToObj(PostEsDTO postEsDTO) {
+        if (postEsDTO == null) {
+            return null;
+        }
+        Post post = new Post();
+        BeanUtils.copyProperties(postEsDTO, post);
+        List<String> tagList = postEsDTO.getTags();
+        if (CollectionUtils.isNotEmpty(tagList)) {
+            post.setTags(GSON.toJson(tagList));
+        }
+        return post;
+    }
+}
+```
+
+3. 开启配置
+
+![image-20231029103040169](assets/image-20231029103040169.png)
+
+#### 增删改查
+
+第一种方式：ElasticsearchRepository<PostEsDTO, Long>默认提供了简单的增删改查，多用于可预期的，相对没那么复杂的查询，自定义查询
+
+```java
+@NoRepositoryBean
+public interface CrudRepository<T, ID> extends Repository<T, ID> {
+    <S extends T> S save(S entity);
+
+    <S extends T> Iterable<S> saveAll(Iterable<S> entities);
+
+    Optional<T> findById(ID id);
+
+    boolean existsById(ID id);
+
+    Iterable<T> findAll();
+
+    Iterable<T> findAllById(Iterable<ID> ids);
+
+    long count();
+
+    void deleteById(ID id);
+
+    void delete(T entity);
+
+    void deleteAllById(Iterable<? extends ID> ids);
+
+    void deleteAll(Iterable<? extends T> entities);
+
+    void deleteAll();
+}
+```
+
+```java
+/**
+ * 帖子 ES 操作
+ *
+ */
+public interface PostEsDao extends ElasticsearchRepository<PostEsDTO, Long> {
+
+    List<PostEsDTO> findByUserId(Long userId);
+    
+    List<PostEsDTO> findByTitle(String title);
+}
+```
+
+ES中，_开头的字段表示系统默认字段，比如 _id，如果不指定，系统会默认生成。但是不会在 _source字段中补充 id的值，所以建议手动指定。
+
+支持根据方法名，自动生成方法，比如：
+
+```
+List<PostEsDTO> findByTitle(String title);
+```
+
+
+
+
+
+第二种方式：Spring默认提供的操作ES的客户端 ElasticsearchRestTemplate，也提供了增删改查，更灵活，适用于复杂的操作
+
+**对于复杂的查询建议采用该方式**
+
+```java
+@Resource
+private ElasticsearchRestTemplate elasticsearchRestTemplate;
+```
+
+步骤：
+
+- 取参数
+- 把参数组合为ES支持的搜索条件
+- 从返回值中取结果
+
+查询DSL：https://www.elastic.co/guide/en/elasticsearch/reference/7.17/query-filter-context.html
+
+```json
+GET post/_search
+{
+  "query": { 
+    "bool": { //组合条件
+      "must": [//必须都满足
+        { "match": { "title":   "落樱"        }}, //match 模糊查询
+        { "match": { "content":   "知识星球"      }}
+      ],
+      "filter": [ 
+        { "term":  { "status": "published" }},//term 精确查询
+        { "range": { "publish_date": { "gte": "2015-01-01" }}}//range 模糊查询
+      ]
+    }
+  }
+}
+```
+
+Bool：https://www.elastic.co/guide/en/elasticsearch/reference/7.17/query-dsl-bool-query.html
+
+建议先写DSL，再翻译成Java
+
+```json
+{
+"query": {
+    "bool": {
+      "must_not": [
+        {
+          "match": {
+            "title": ""
+          }
+        },
+      ],
+      "should": [
+        {
+          "match": {
+            "title": ""
+          }
+        },
+        {
+          "match": {
+            "desc": ""
+          }
+        }
+      ],
+      "filter": [
+        {
+          "term": {
+            "isDelete": 0
+          }
+        },
+        {
+          "term": {
+            "id": 1
+          }
+        },
+        {
+          "term": {
+            "tags": "java"
+          }
+        },
+        {
+          "term": {
+            "tags": "框架"
+          }
+        }
+      ],
+      "minimum_should_match": 0
+    }
+  },
+  "from": 0, // 分页
+  "size": 5, // 分页
+  "_source": ["name", "_createTime", "desc", "reviewStatus", "priority", "tags"], // 要查的字段
+  "sort": [ // 排序
+    {
+      "priority": {
+        "order": "desc"
+      }
+    },
+    {
+      "_score": {
+        "order": "desc"
+      }
+    },
+    {
+      "publishTime": {
+        "order": "desc"
+      }
+    }
+  ]
+}
+```
+
+翻译成Java
+
+```java
+@Override
+public Page<Post> searchFromEs(PostQueryRequest postQueryRequest) {
+    Long id = postQueryRequest.getId();
+    Long notId = postQueryRequest.getNotId();
+    String searchText = postQueryRequest.getSearchText();
+    String title = postQueryRequest.getTitle();
+    String content = postQueryRequest.getContent();
+    List<String> tagList = postQueryRequest.getTags();
+    List<String> orTagList = postQueryRequest.getOrTags();
+    Long userId = postQueryRequest.getUserId();
+    // es 起始页为 0
+    long current = postQueryRequest.getCurrent() - 1;
+    long pageSize = postQueryRequest.getPageSize();
+    String sortField = postQueryRequest.getSortField();
+    String sortOrder = postQueryRequest.getSortOrder();
+    BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
+    // 过滤
+    boolQueryBuilder.filter(QueryBuilders.termQuery("isDelete", 0));
+    if (id != null) {
+        boolQueryBuilder.filter(QueryBuilders.termQuery("id", id));
+    }
+    if (notId != null) {
+        boolQueryBuilder.mustNot(QueryBuilders.termQuery("id", notId));
+    }
+    if (userId != null) {
+        boolQueryBuilder.filter(QueryBuilders.termQuery("userId", userId));
+    }
+    // 必须包含所有标签
+    if (CollectionUtils.isNotEmpty(tagList)) {
+        for (String tag : tagList) {
+            boolQueryBuilder.filter(QueryBuilders.termQuery("tags", tag));
+        }
+    }
+    // 包含任何一个标签即可
+    if (CollectionUtils.isNotEmpty(orTagList)) {
+        BoolQueryBuilder orTagBoolQueryBuilder = QueryBuilders.boolQuery();
+        for (String tag : orTagList) {
+            orTagBoolQueryBuilder.should(QueryBuilders.termQuery("tags", tag));
+        }
+        orTagBoolQueryBuilder.minimumShouldMatch(1);
+        boolQueryBuilder.filter(orTagBoolQueryBuilder);
+    }
+    // 按关键词检索
+    if (StringUtils.isNotBlank(searchText)) {
+        boolQueryBuilder.should(QueryBuilders.matchQuery("title", searchText));
+        boolQueryBuilder.should(QueryBuilders.matchQuery("content", searchText));
+        boolQueryBuilder.minimumShouldMatch(1);
+    }
+    // 按标题检索
+    if (StringUtils.isNotBlank(title)) {
+        boolQueryBuilder.should(QueryBuilders.matchQuery("title", title));
+        boolQueryBuilder.minimumShouldMatch(1);
+    }
+    // 按内容检索
+    if (StringUtils.isNotBlank(content)) {
+        boolQueryBuilder.should(QueryBuilders.matchQuery("content", content));
+        boolQueryBuilder.minimumShouldMatch(1);
+    }
+    // 排序
+    SortBuilder<?> sortBuilder = SortBuilders.scoreSort();
+    if (StringUtils.isNotBlank(sortField)) {
+        sortBuilder = SortBuilders.fieldSort(sortField);
+        sortBuilder.order(CommonConstant.SORT_ORDER_ASC.equals(sortOrder) ? SortOrder.ASC : SortOrder.DESC);
+    }
+    // 分页
+    PageRequest pageRequest = PageRequest.of((int) current, (int) pageSize);
+    // 构造查询
+    NativeSearchQuery searchQuery = new NativeSearchQueryBuilder().withQuery(boolQueryBuilder)
+            .withPageable(pageRequest).withSorts(sortBuilder).build();
+    SearchHits<PostEsDTO> searchHits = elasticsearchRestTemplate.search(searchQuery, PostEsDTO.class);
+    Page<Post> page = new Page<>();
+    page.setTotal(searchHits.getTotalHits());
+    List<Post> resourceList = new ArrayList<>();
+    // 查出结果后，从 db 获取最新动态数据（比如点赞数）
+    if (searchHits.hasSearchHits()) {
+        List<SearchHit<PostEsDTO>> searchHitList = searchHits.getSearchHits();
+        List<Long> postIdList = searchHitList.stream().map(searchHit -> searchHit.getContent().getId())
+                .collect(Collectors.toList());
+        List<Post> postList = baseMapper.selectBatchIds(postIdList);
+        if (postList != null) {
+            Map<Long, List<Post>> idPostMap = postList.stream().collect(Collectors.groupingBy(Post::getId));
+            postIdList.forEach(postId -> {
+                if (idPostMap.containsKey(postId)) {
+                    resourceList.add(idPostMap.get(postId).get(0));
+                } else {
+                    // 从 es 清空 db 已物理删除的数据
+                    String delete = elasticsearchRestTemplate.delete(String.valueOf(postId), PostEsDTO.class);
+                    log.info("delete post {}", delete);
+                }
+            });
+        }
+    }
+    page.setRecords(resourceList);
+    return page;
+}
+```
+
+从Es筛选出静态数据，再根据查到的内容的id去数据库查找到动态数据
+
+### 数据同步
+
+一般情况下，如果做搜索查询功能，使用ES来做模糊搜索，但是数据存放在MySQL，所以我们需要把MySQL中的数据和ES同步，保证数据一致（以MySQL为主）
+
+MySQL => ES（单向）	
+
+首次安装完ES，把 MySQL数据全量同步到ES里，写一个单次脚本
+
+4种方式，全量同步（首次）+增量同步（新数据）：
+
+1. **定时任务：**比如1分钟1次，找到MySQL过去几分钟内发生改变的数据，然后更新到ES
+
+   1. 优点：简单易懂，占用资源少，不用引入第三方中间件
+   2. 缺点：有时间差
+
+   应用场景：数据短时间内不同步影响不大，或者数据几乎不发生修改
+
+2. **双写：**写数据库的同时，必须去写ES；更新删除数据库同理（事务：建议先保证MySQL写成功，如果ES写失败了，可以通过定时任务 + 日志 + 告警进行检测和修复（补偿））
+
+3. **Logstash数据同步管道：**https://www.elastic.co/guide/en/logstash/7.17/getting-started-with-logstash.html
+
+   好处：方便，插件多
+
+   缺点：成本更大，一般要配合Kafka消息队列和Beats采集器
+
+   ![image-20231029132158622](assets/image-20231029132158622.png)
+
+   1. 下载并解压https://www.elastic.co/cn/downloads/logstash
+
+   2. 事件Demo
+
+      ```sh
+      cd logstash-7.17.14
+      .\bin\logstash.bat -e "input { stdin { } } output { stdout {} }"
+      ```
+
+   3. 快速开始文档https://www.elastic.co/guide/en/logstash/7.17/running-logstash-windows.html
+
+      监听udp端口并输出
+
+      ```sh
+      # Sample Logstash configuration for receiving
+      # UDP syslog messages over port 514
+      
+      input {
+        udp {
+          port => 514
+          type => "syslog"
+        }
+      }
+      
+      output {	
+        stdout { codec => rubydebug }
+      }
+      ```
+
+   4. 同步
+
+      ```sh
+      #根据配置文件启动
+      logstash.bat -f ..\config\myTask.conf
+      ```
+
+      1. 编写输入配置https://www.elastic.co/guide/en/logstash/7.17/plugins-inputs-jdbc.html
+
+         
+
+         ![image-20231029135305732](assets/image-20231029135305732.png)
+
+         ```sh
+         input {
+           jdbc {
+             jdbc_driver_library => "D:\soft\ElasticStack\logstash-7.17.14\config\mysql-connector-java-8.0.29.jar"
+             jdbc_driver_class => "com.mysql.jdbc.Driver"
+             jdbc_connection_string => "jdbc:mysql://localhost:3306/luosou"
+             jdbc_user => "root"
+             jdbc_password => "123"
+             statement => "SELECT * from post where updateTime > :sql_last_value and updateTime < now() w order by updateTime desc" #增量同步
+             tracking_column => "updatetime"
+             tracking_column_type => "timestamp"
+             use_column_value => true
+             parameters => { "favorite_artist" => "Beethoven" }
+             schedule => "*/5 * * * * *"
+             jdbc_default_timezone => "Asia/Shanghai"
+           }
+         }
+         
+         output {  
+           stdout { codec => rubydebug }
+         }
+         ```
+
+          sql_last_value是取上次查到的最后一行数据的指定的字段，由tracking_column指定
+
+         如果要全量更新，只需要删除掉 D:\soft\ElasticStack\logstash-7.17.14\data\plugins\inputs\jdbc\logstash_jdbc_last_run文件或者文件中的值即可。在本项目中，该文件记录的是最后一条同步数据的更新时间
+
+         ![image-20231029143141486](assets/image-20231029143141486.png)
+
+      2. 提供mysql的jar包
+
+         到SpringBoot项目的外部库中复制
+
+         ![image-20231029135044915](assets/image-20231029135044915.png)
+
+         ![image-20231029135130150](assets/image-20231029135130150.png)
+
+      3. 编写输出配置https://www.elastic.co/guide/en/logstash/7.17/plugins-outputs-elasticsearch.html
+
+         ```sh
+         input {
+           jdbc {
+             jdbc_driver_library => "D:\soft\ElasticStack\logstash-7.17.14\config\mysql-connector-java-8.0.29.jar"
+             jdbc_driver_class => "com.mysql.jdbc.Driver"
+             jdbc_connection_string => "jdbc:mysql://localhost:3306/luosou"
+             jdbc_user => "root"
+             jdbc_password => "123"
+             statement => "SELECT * from post where updateTime > :sql_last_value and updateTime < now() order by updateTime desc"
+             tracking_column => "updatetime"
+             tracking_column_type => "timestamp"
+             use_column_value => true
+             parameters => { "favorite_artist" => "Beethoven" }
+             schedule => "*/5 * * * * *"
+             jdbc_default_timezone => "Asia/Shanghai"
+           }
+         }
+         
+         output {  
+           stdout { codec => rubydebug }
+         
+           elasticsearch {
+             hosts => "127.0.0.1:9200"
+             index => "post_v1"
+             document_id => "%{id}" #把从数据库中查出来的每条记录的id作为文档的id
+           }
+         }
+         ```
+
+      4. 问题
+
+         1. 字段全变成小写了
+         2. 多了不想同步的字段
+
+         解决https://www.elastic.co/guide/en/logstash/7.17/plugins-filters-mutate.html
+
+         编写过滤
+
+         ```SH
+         input {
+           jdbc {
+             jdbc_driver_library => "D:\soft\ElasticStack\logstash-7.17.14\config\mysql-connector-java-8.0.29.jar"
+             jdbc_driver_class => "com.mysql.jdbc.Driver"
+             jdbc_connection_string => "jdbc:mysql://localhost:3306/luosou"
+             jdbc_user => "root"
+             jdbc_password => "123"
+             statement => "SELECT * from post where updateTime > :sql_last_value and updateTime < now() order by updateTime desc"
+             tracking_column => "updatetime"
+             tracking_column_type => "timestamp"
+             use_column_value => true
+             parameters => { "favorite_artist" => "Beethoven" }
+             schedule => "*/5 * * * * *"
+             jdbc_default_timezone => "Asia/Shanghai"
+           }
+         }
+         
+         filter { #过滤
+           mutate {
+             rename => {
+              "updatetime" => "updateTime"
+              "createtime" => "createTime"
+              "userid" => "userId"
+              "isdelete" => "isDelete"
+             }
+             remove_field => [ "thumbnum","favournum" ]
+           }
+         }
+         
+         output {  
+           stdout { codec => rubydebug }
+         
+           elasticsearch {
+             hosts => "127.0.0.1:9200"
+             index => "post_v"
+             document_id => "%{id}"
+           }
+         }
+         ```
+
+      5. 配置kibana可视化看板
+
+         1. 创建索引的字段集
+
+         ![image-20231029210306828](assets/image-20231029210306828.png)
+
+         ![image-20231029210255049](assets/image-20231029210255049.png)
+
+         ![image-20231029210403279](assets/image-20231029210403279.png)
+
+         ![image-20231029210429898](assets/image-20231029210429898.png)
+
+         ![image-20231029210634625](assets/image-20231029210634625.png)
+
+         ![image-20231029210705203](assets/image-20231029210705203.png)
+
+         ![image-20231029211026747](assets/image-20231029211026747.png)
+
+         ![image-20231029211134433](assets/image-20231029211134433.png)
+
+         2. 选择图表，拖拉拽
+
+         ![image-20231029211209257](assets/image-20231029211209257.png)
+
+         ![image-20231029211424388](assets/image-20231029211424388.png)
+
+         ![image-20231029211551372](assets/image-20231029211551372.png)
+
+         3. 保存
+
+         ![image-20231029212353477](assets/image-20231029212353477.png)
+
+          ![image-20231029212426665](assets/image-20231029212426665.png)
+
+4. **Cannal订阅数据库流水**https://github.com/alibaba/canal
+
+   优点：实时同步，实时性非常强
+
+   原理：数据库每次修改时，会修改binlog文件，只要监听该文件修改，就能第一时间得到消息并处理。
+
+   canal：帮你监听binlog，并解析binlog为你可以理解的内容
+
+   它伪装成了mysql的从节点，获取主节点的binlog
+
+
+
+**快速开始：**https://github.com/alibaba/canal/wiki/QuickStart
+
+1. 新建my.ini文件，并把以下内容复制到文件
+
+   ```sh
+   [mysqld]
+   log-bin=mysql-bin # 开启 binlog
+   binlog-format=ROW # 选择 ROW 模式
+   server_id=1 # 配置 MySQL replaction 需要定义，不要和 canal 的 slaveId 重复
+   ```
+
+   ![image-20231029161431401](assets/image-20231029161431401.png)
+
+   ![image-20231029200251283](assets/image-20231029200251283.png)
+
+2. 授权 canal 链接 MySQL 账号具有作为 MySQL slave 的权限, 如果已有账户可直接 grant
+
+   ![image-20231029161718453](assets/image-20231029161718453.png)
+
+3. 下载并解压https://github.com/alibaba/canal/releases
+
+4. 修改配置
+
+   ![image-20231029201425030](assets/image-20231029201425030.png)
+
+   ![image-20231029201550359](assets/image-20231029201550359.png)
+
+5. 启动
+
+   ![image-20231029163327374](assets/image-20231029163327374.png)
+
+   如果启动失败，修改startup.bat脚本文件，修改为自己的java home
+
+   ![image-20231029163409626](assets/image-20231029163409626.png)
+
+**跑Demo**https://github.com/alibaba/canal/wiki/ClientExample
+
+1. 引入依赖
+
+   ```xml
+   <dependency>
+       <groupId>com.alibaba.otter</groupId>
+       <artifactId>canal.client</artifactId>
+       <version>1.1.0</version>
+   </dependency>
+   ```
+
+2. 复制实例代码
+
+   ![image-20231029201129558](assets/image-20231029201129558.png)
+
+3. 启动后修改数据库，观察变化
+
+   ![image-20231029201329730](assets/image-20231029201329730.png)
+
+### 搜索建议
+
+https://www.elastic.co/guide/en/elasticsearch/reference/7.17/search-suggesters.html
+
+```json
+GET /post/_search
+{
+  "query": {
+    "match": { "content": "JavaWeb" }
+  },
+  "highlight": {
+    "fields": {
+      "content": { "pre_tags" : ["<h1>"], "post_tags" : ["</h1>"] }
+    }
+  },
+  "suggest" : {
+    "my-suggestion" : {
+      "text" : "JavaWe好好好",
+      "term" : {
+        "field" : "content"
+      }
+    }
+  }
+}
+```
+
+### 关键词高亮
+
+https://www.elastic.co/guide/en/elasticsearch/reference/7.17/highlighting.html
+
+~~~ json
+GET /post/_search
+{
+  "query": {
+    "match": { "content": "JavaWeb" }
+  },
+  "highlight": {
+    "fields": {
+      "content": { "pre_tags" : ["<h1>"], "post_tags" : ["</h1>"] }
+    }
+  }
+}
+~~~
+
+高亮，建议都可以从返回值中取
+
+![image-20231029205103840](assets/image-20231029205103840.png)
+
+### 前端防抖节流
+
+**Lodash**
+
+**节流：**https://www.lodashjs.com/docs/lodash.throttle
+
+每段时间最多执行x次，限制流量，单位时间只能固定数量用户访问
+
+**防抖：**https://www.lodashjs.com/docs/lodash.debounce
+
+若一段时间内，没有其他操作，再执行搜索
+
+比如用户输入搜索内容时，过了2秒用户没有继续输入，就执行自动搜索；2秒内有输入，就不执行自动搜索
